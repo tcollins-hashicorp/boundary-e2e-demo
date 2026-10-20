@@ -1,0 +1,10 @@
+.env
+terraform/.terraform/
+terraform/*.tfstate*
+terraform/terraform.tfvars
+terraform/pam_runtime.json
+vault/boundary-vault-token.txt
+vault/trusted-ca.pub
+vault/audit/*.log
+pam-app/data/*.json
+pam-app/data/*.jsonl

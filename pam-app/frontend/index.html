@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ServiceDesk · Privileged Access Management</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <!-- Replace with the customer's ITSM logo if desired. Generic mark for now. -->
+      <span class="brand-mark">◆</span>
+      <span class="brand-name">ServiceDesk</span>
+      <span class="brand-sep">/</span>
+      <span class="brand-module">Privileged Access Management</span>
+    </div>
+    <div class="topbar-right">
+      <span class="who" id="who">sam · Approver</span>
+    </div>
+  </header>
+
+  <div class="layout">
+    <nav class="sidenav">
+      <button class="nav-item active" data-filter="all">All requests</button>
+      <button class="nav-item" data-filter="PENDING">Pending approval</button>
+      <button class="nav-item" data-filter="APPROVED">Active access</button>
+      <button class="nav-item" data-filter="EXPIRED">Expired</button>
+      <button class="nav-item" data-filter="DENIED">Denied</button>
+      <div class="nav-spacer"></div>
+      <button class="nav-cta" id="newBtn">+ New request</button>
+    </nav>
+
+    <main class="content">
+      <div class="content-head">
+        <h1 id="viewTitle">All requests</h1>
+        <span class="count" id="count"></span>
+      </div>
+      <table class="grid">
+        <thead>
+          <tr>
+            <th>Number</th><th>Requester</th><th>Target</th>
+            <th>Window</th><th>Status</th><th>Raised</th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+      <p class="empty" id="empty" hidden>No requests in this view.</p>
+    </main>
+
+    <aside class="drawer" id="drawer" hidden>
+      <div class="drawer-head">
+        <h2 id="dTitle">REQ</h2>
+        <button class="x" id="closeDrawer">×</button>
+      </div>
+      <div class="drawer-body" id="drawerBody"></div>
+    </aside>
+  </div>
+
+  <!-- New request modal -->
+  <div class="modal-backdrop" id="modal" hidden>
+    <div class="modal">
+      <h2>Raise access request</h2>
+      <label>Requester
+        <input id="f_requester" value="dana" />
+      </label>
+      <label>Target system
+        <select id="f_target">
+          <option value="prod-payments-jump">prod-payments-jump (restricted)</option>
+        </select>
+      </label>
+      <label>Business justification
+        <textarea id="f_reason" rows="3" placeholder="Change ticket CHG0042181: apply payments ledger hotfix during approved window"></textarea>
+      </label>
+      <label>Access window
+        <select id="f_window">
+          <option value="2">2 minutes</option>
+          <option value="5">5 minutes</option>
+          <option value="15" selected>15 minutes</option>
+          <option value="30">30 minutes</option>
+          <option value="60">60 minutes</option>
+        </select>
+      </label>
+      <div class="modal-actions">
+        <button class="btn-ghost" id="cancelBtn">Cancel</button>
+        <button class="btn-primary" id="submitBtn">Submit request</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

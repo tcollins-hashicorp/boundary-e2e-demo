@@ -1,0 +1,57 @@
+# File-based log shipping, no container socket. Three structured streams carry
+# the audit story, identically on macOS and Linux:
+#   1. PAM portal audit (JSONL)        — the request→approve→grant→revoke spine
+#   2. Vault file audit device (JSON)  — credential brokering (SSH certs, K8s tokens)
+#   3. Boundary worker events (NDJSON) — session proxying and recording activity
+server:
+  http_listen_port: 9080
+  log_level: warn
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+
+  - job_name: pam-audit
+    static_configs:
+      - targets: [localhost]
+        labels:
+          job: pam-audit
+          service: pam-portal
+          __path__: /logs/pam/audit.jsonl
+    pipeline_stages:
+      - json:
+          expressions:
+            request_id: request_id
+            actor: actor
+            action: action
+            detail: detail
+      - labels:
+          action:
+          request_id:
+
+  - job_name: vault-audit
+    static_configs:
+      - targets: [localhost]
+        labels:
+          job: vault-audit
+          service: vault
+          __path__: /logs/vault/audit.log
+    pipeline_stages:
+      - json:
+          expressions:
+            type: type
+            operation: request.operation
+            path: request.path
+            actor: auth.display_name
+
+  - job_name: worker-events
+    static_configs:
+      - targets: [localhost]
+        labels:
+          job: worker-events
+          service: boundary-worker
+          __path__: /logs/worker/worker-events.ndjson

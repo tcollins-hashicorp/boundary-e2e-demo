@@ -1,0 +1,344 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HashiCorp Boundary: End to End</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Inter:wght@400;500;600&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#09090a;--paper:#101114;--card:#1a1d22;--card2:#15181c;--line:#2b2e35;--line2:#3a3e46;
+  --text:#f2f2f3;--muted:#b7bbc2;--faint:#80838b;
+  --coral:#f24c53;--coralD:#c9353c;--tint:#2a1416;--tintB:#4a2024;
+  --teal:#49c08a;--amber:#e0a63c;
+  --fd:'Space Grotesk','Segoe UI',system-ui,sans-serif;
+  --fb:'Inter',system-ui,-apple-system,sans-serif;
+  --fm:'Space Mono',ui-monospace,Menlo,monospace;
+}
+html,body{height:100%}
+body{background:var(--bg);font-family:var(--fb);color:var(--text);overflow:hidden;display:flex;align-items:center;justify-content:center}
+#stage{width:1920px;height:1080px;position:relative;transform-origin:center center;background:var(--paper);overflow:hidden}
+
+.slide{position:absolute;inset:0;padding:110px 130px 120px;display:flex;flex-direction:column;gap:40px;
+  opacity:0;visibility:hidden;transition:opacity .35s ease;background:var(--paper)}
+.slide.active{opacity:1;visibility:visible}
+
+.kick{font-family:var(--fm);font-size:22px;letter-spacing:.22em;color:var(--coral);text-transform:uppercase}
+.title{font-family:var(--fd);font-weight:700;font-size:78px;line-height:1.04;max-width:1500px;color:var(--text)}
+.title.sm{font-size:62px}
+.lead{font-size:30px;color:var(--muted);max-width:1300px;line-height:1.5}
+.head-block{display:flex;flex-direction:column;gap:16px}
+
+/* footer */
+footer{position:absolute;left:130px;right:130px;bottom:52px;display:flex;align-items:center;justify-content:space-between}
+.lock{display:flex;align-items:center;gap:14px;opacity:.85}
+.lock .hc{width:26px;height:26px;fill:var(--text)}
+.lock .bmark{height:26px}
+.lock span{font-family:var(--fd);font-weight:500;font-size:20px;letter-spacing:.02em}
+.pager{font-family:var(--fm);font-size:18px;color:var(--faint)}
+
+/* cards grid */
+.grid{display:grid;gap:26px;margin-top:8px}
+.g2{grid-template-columns:1fr 1fr}
+.g3{grid-template-columns:repeat(3,1fr)}
+.g4{grid-template-columns:repeat(2,1fr)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:34px 36px}
+.card h3{font-family:var(--fd);font-weight:500;font-size:30px;margin-bottom:12px;color:var(--text)}
+.card h3 .n{color:var(--coral);font-family:var(--fm);font-size:22px;margin-right:12px}
+.card p{font-size:23px;line-height:1.5;color:var(--muted)}
+
+/* concept chips */
+.chips{display:grid;grid-template-columns:repeat(4,1fr);gap:20px;margin-top:10px}
+.chip{background:var(--card2);border:1px solid var(--line);border-radius:14px;padding:26px 28px}
+.chip h4{font-family:var(--fd);font-weight:500;font-size:25px;margin-bottom:8px}
+.chip p{font-size:19px;color:var(--faint);line-height:1.45}
+
+/* flow */
+.flow{display:flex;align-items:stretch;gap:6px;margin-top:20px}
+.node{flex:1 1 0;background:var(--card);border:1px solid var(--line);border-radius:16px;padding:30px 28px;display:flex;flex-direction:column;gap:14px;min-width:0}
+.node .ico{width:46px;height:46px;color:var(--coral)}
+.node .ico svg{width:46px;height:46px;stroke:currentColor;fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.node h3{font-family:var(--fd);font-weight:500;font-size:26px}
+.node p{font-size:20px;color:var(--muted);line-height:1.45}
+.node.accent{border-color:var(--coralD);background:linear-gradient(180deg,var(--tint),var(--card))}
+.node.pulse{animation:pulse 2.6s ease-in-out infinite}
+@keyframes pulse{0%,66%{box-shadow:0 0 0 0 rgba(242,76,83,0)}82%{box-shadow:0 0 0 10px rgba(242,76,83,.16)}100%{box-shadow:0 0 0 0 rgba(242,76,83,0)}}
+.wire{position:relative;flex:0 0 54px;align-self:center;height:2px;background:var(--line2)}
+.wire .orb{position:absolute;top:50%;left:0;width:11px;height:11px;margin-top:-6px;border-radius:50%;background:var(--coral);box-shadow:0 0 14px 2px var(--coral);animation:travel 2.6s linear infinite}
+@keyframes travel{0%{left:-4px;opacity:0}12%{opacity:1}88%{opacity:1}100%{left:calc(100% - 4px);opacity:0}}
+
+.side{display:flex;gap:24px;margin-top:24px}
+.side .card{flex:1}
+
+/* comparison table */
+table.cmp{width:100%;border-collapse:collapse;margin-top:14px;font-size:24px}
+table.cmp th,table.cmp td{text-align:left;padding:20px 26px;border-bottom:1px solid var(--line)}
+table.cmp thead th{font-family:var(--fm);font-size:18px;letter-spacing:.08em;text-transform:uppercase;color:var(--faint)}
+table.cmp th.col{text-align:center;width:230px}
+table.cmp td.c{text-align:center}
+table.cmp .feat{color:var(--text)}
+.yes{color:var(--teal);font-weight:600}
+.no{color:var(--faint)}
+.hcp{color:var(--coral);font-weight:600}
+.hcol{background:var(--tint)}
+
+/* before/after */
+.ba{display:grid;grid-template-columns:1fr 1fr;gap:26px;margin-top:16px}
+.ba .card .tag{font-family:var(--fm);font-size:18px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:14px}
+.ba .before .tag{color:var(--amber)}
+.ba .after .tag{color:var(--teal)}
+.ba p{font-size:24px}
+
+/* demo list */
+.demo{display:grid;grid-template-columns:1fr 1fr;gap:20px 46px;margin-top:16px}
+.step{display:flex;gap:22px;align-items:flex-start}
+.step .no{font-family:var(--fm);font-weight:700;font-size:28px;color:var(--coral);min-width:40px}
+.step h4{font-family:var(--fd);font-weight:500;font-size:27px;margin-bottom:4px}
+.step p{font-size:21px;color:var(--muted);line-height:1.4}
+
+/* title slide */
+.cover{justify-content:center;gap:34px}
+.cover .big{font-family:var(--fd);font-weight:700;font-size:118px;line-height:1;letter-spacing:-.01em}
+.cover .big .b{color:var(--coral)}
+.cover .sub{font-size:34px;color:var(--muted);max-width:1200px;line-height:1.45}
+.cover .marks{display:flex;align-items:center;gap:40px;margin-top:20px;opacity:.9}
+.cover .marks svg{height:42px;fill:var(--text)}
+.cover .marks img{height:48px}
+.cover .marks .vt{height:40px}
+
+/* close */
+.closing{justify-content:center}
+.closing .title{font-size:92px;max-width:1500px}
+
+/* progress + notes */
+#bar{position:fixed;left:0;top:0;height:4px;background:var(--coral);width:0;z-index:50;transition:width .3s}
+#notes{position:fixed;left:0;right:0;bottom:0;max-height:38vh;overflow:auto;background:rgba(10,10,11,.96);
+  border-top:2px solid var(--coral);padding:26px 40px;font-size:20px;line-height:1.6;color:var(--muted);display:none;z-index:60}
+#notes.show{display:block}
+#notes b{color:var(--text);font-family:var(--fm);font-size:15px;letter-spacing:.1em;text-transform:uppercase;display:block;margin-bottom:8px}
+#hint{position:fixed;right:16px;bottom:14px;font-family:var(--fm);font-size:13px;color:var(--faint);z-index:55}
+</style>
+</head>
+<body>
+<div id="bar"></div>
+<div id="stage">
+
+  <!-- 1 cover -->
+  <section class="slide cover active" data-notes="Set the frame: this is one demo that runs top to bottom. Identity-based access to SSH and Kubernetes, credentials brokered by Vault, every session recorded, and a just-in-time workflow for production. Built for a regulated bank, so audit is first class.">
+    <div class="kick">Secure remote access</div>
+    <div class="big">HashiCorp <span class="b">Boundary</span></div>
+    <div class="sub">Identity-based access, brokered credentials, recorded sessions. SSH, Kubernetes, and just-in-time privilege, end to end, for a regulated bank.</div>
+    <div class="marks">
+      <svg viewBox="0 0 512 512"><path d="M372.1 43.9V329l-75.8 43.6v-82.4h-80.5V512l-75.5-43.9V183l75.5-43.6v83h80.5V0zm125.6 72.7v279.2L296.3 512v-87.4l126-72.7V72.7zm-282-29.2L90.1 160.1v279.2l-75.8-43.9V116.3L215.7 0z"/></svg>
+      <img class="bmark" src="data:image/png;base64,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" alt="Boundary">
+    </div>
+  </section>
+
+  <!-- 2 what -->
+  <section class="slide" data-notes="Boundary is a smart proxy. You never connect straight to the host. You connect to Boundary, it checks who you are and whether you are allowed, then pipes the session through a worker. A bouncer who also walks you to your table.">
+    <div class="head-block"><div class="kick">What it is</div><h2 class="title sm">A smart proxy between people and systems</h2></div>
+    <div class="grid g4">
+      <div class="card"><h3>Identity, not network</h3><p>Access is granted to a person authenticated against your IdP, not to anyone who can reach an IP.</p></div>
+      <div class="card"><h3>Nothing is exposed</h3><p>Targets publish no ports. The only way in is a Boundary session, or no way at all.</p></div>
+      <div class="card"><h3>Credentials stay hidden</h3><p>Vault brokers or injects the secret at connect time. With injection the user never sees it.</p></div>
+      <div class="card"><h3>Every session is visible</h3><p>Who connected, to what, when, and what they did. Recorded, not reconstructed.</p></div>
+    </div>
+  </section>
+
+  <!-- 3 why -->
+  <section class="slide" data-notes="Frame the bank's pain. Standing access is the risk: long-lived keys, broad privilege that never expires, and the after-the-fact guesswork of naming the human behind a shared account by stitching CyberArk and host logs.">
+    <div class="head-block"><div class="kick">The problem</div><h2 class="title sm">Standing access is the risk</h2></div>
+    <div class="grid g4">
+      <div class="card"><h3>VPN and bastion sprawl</h3><p>Flat network reach once you are in. One compromised laptop sees far too much.</p></div>
+      <div class="card"><h3>Long-lived secrets</h3><p>Keys and passwords on hosts and in password vaults, rarely rotated, easy to copy.</p></div>
+      <div class="card"><h3>Who did what?</h3><p>The host logs a service account. Naming the human means joining CyberArk and host logs and guessing.</p></div>
+      <div class="card"><h3>Privilege that never ends</h3><p>Access granted for one change request outlives it by months. Nobody revokes on time.</p></div>
+    </div>
+  </section>
+
+  <!-- 4 concepts -->
+  <section class="slide" data-notes="The vocabulary. Controller is the brain: you run it, backed by Postgres. Workers are the muscle that proxy sessions near the targets, joining the controller with a shared KMS key. Scopes organise orgs and projects. Targets are what you reach. Credential stores and libraries bind Vault in. Sessions are the audited unit.">
+    <div class="head-block"><div class="kick">Concepts</div><h2 class="title sm">The moving parts</h2></div>
+    <div class="chips">
+      <div class="chip"><h4>Controller</h4><p>The control plane. Authenticates, authorizes, tracks sessions. You run it, on Postgres.</p></div>
+      <div class="chip"><h4>Worker</h4><p>Proxies and records sessions near the targets. Joins the controller by KMS.</p></div>
+      <div class="chip"><h4>Scopes</h4><p>Global, org, project. Where roles and grants are resolved.</p></div>
+      <div class="chip"><h4>Targets</h4><p>SSH, TCP, Kubernetes. What a user is authorized to reach.</p></div>
+      <div class="chip"><h4>Host sets</h4><p>The addresses behind a target, static or dynamically discovered.</p></div>
+      <div class="chip"><h4>Credential stores</h4><p>Vault or static. Libraries mint or hold the secret for a target.</p></div>
+      <div class="chip"><h4>Auth methods</h4><p>OIDC, LDAP, password. The human identity every session carries.</p></div>
+      <div class="chip"><h4>Sessions</h4><p>The audited unit. Bound to a person, a target, and a time.</p></div>
+    </div>
+  </section>
+
+  <!-- 5 architecture -->
+  <section class="slide" data-notes="Architecture in one line: you run the whole thing. The controller is a container backed by Postgres; a worker joins it by KMS and reaches the private targets, relays Vault, and records to object storage. Nothing leaves your environment. The orb shows a session flowing to the target.">
+    <div class="head-block"><div class="kick">Architecture</div><h2 class="title sm">Self-managed, end to end</h2></div>
+    <div class="flow">
+      <div class="node"><div class="ico"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg></div><h3>User</h3><p>Authenticates through your IdP.</p></div>
+      <div class="wire"><span class="orb"></span></div>
+      <div class="node"><div class="ico"><svg viewBox="0 0 24 24"><path d="M12 3l7 3v5c0 5-3 8-7 10-4-2-7-5-7-10V6z"/><path d="M9 12l2 2 4-4"/></svg></div><h3>Controller</h3><p>You run it, on Postgres. Authorizes sessions.</p></div>
+      <div class="wire"><span class="orb" style="animation-delay:.3s"></span></div>
+      <div class="node accent"><div class="ico"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/></svg></div><h3>Worker</h3><p>Proxies, injects, records. Joins by KMS.</p></div>
+      <div class="wire"><span class="orb" style="animation-delay:.6s"></span></div>
+      <div class="node pulse"><div class="ico"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M7 9l3 2-3 2M13 14h4"/></svg></div><h3>Target</h3><p>SSH host, Postgres, or the cluster.</p></div>
+    </div>
+    <div class="side">
+      <div class="card"><h3>Vault, alongside</h3><p>The worker relays credential requests to Vault: SSH certificates and Kubernetes tokens, minted on demand.</p></div>
+      <div class="card"><h3>Object store, alongside</h3><p>The worker writes session recordings to S3 or MinIO in BSR format when the session ends.</p></div>
+    </div>
+  </section>
+
+  <!-- 6 editions -->
+  <section class="slide" data-notes="The comparison, both editions self-managed. Community gets you connected with identity-based access and brokering. The enterprise line is the audit story: credential injection so the secret never touches the laptop, session recording, and retention policies. For a regulated bank those three are the requirement, not the nice-to-have.">
+    <div class="head-block"><div class="kick">Editions</div><h2 class="title sm">Why lean enterprise</h2></div>
+    <table class="cmp">
+      <thead><tr><th>Capability</th><th class="col">Community</th><th class="col hcol">Enterprise</th></tr></thead>
+      <tbody>
+        <tr><td class="feat">Identity-based access</td><td class="c yes">Yes</td><td class="c hcp hcol">Yes</td></tr>
+        <tr><td class="feat">Credential brokering</td><td class="c yes">Yes</td><td class="c hcp hcol">Yes</td></tr>
+        <tr><td class="feat">Dynamic host catalogs</td><td class="c yes">Yes</td><td class="c hcp hcol">Yes</td></tr>
+        <tr><td class="feat">Credential injection (secret stays off the laptop)</td><td class="c no">—</td><td class="c hcp hcol">Yes</td></tr>
+        <tr><td class="feat">SSH session recording</td><td class="c no">—</td><td class="c hcp hcol">Yes</td></tr>
+        <tr><td class="feat">Session recording retention policies</td><td class="c no">—</td><td class="c hcp hcol">Yes</td></tr>
+        <tr><td class="feat">Multi-tenancy &amp; managed workers</td><td class="c no">—</td><td class="c hcp hcol">Yes</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- 7 correlation tax -->
+  <section class="slide" data-notes="This is the exact customer pain. Today naming the human behind a session means stitching the CyberArk record to the host log and inferring. Boundary already holds the authoritative link, so the join disappears.">
+    <div class="head-block"><div class="kick">Audit &amp; compliance</div><h2 class="title sm">The correlation tax</h2></div>
+    <div class="lead">The host only ever sees the account the credential maps to. Naming the human who sat behind it is a manual join across two systems, done after the fact.</div>
+    <div class="ba">
+      <div class="card before"><div class="tag">Today</div><p>CyberArk session + host auth log + timestamps, reconciled by hand to guess who it was. Slow, and never certain.</p></div>
+      <div class="card after"><div class="tag">With Boundary</div><p>The session already names the person, the target, and the time. One record, no join, no guessing.</p></div>
+    </div>
+  </section>
+
+  <!-- 8 identity-bound -->
+  <section class="slide" data-notes="Why the join disappears: the human authenticates against the IdP before any connection opens, and that identity rides the session for its whole life. Even when Vault injects a shared service account and the host logs that account, Boundary's record binds the connection to the real person.">
+    <div class="head-block"><div class="kick">Audit &amp; compliance</div><h2 class="title sm">Every session carries the human</h2></div>
+    <div class="flow">
+      <div class="node"><div class="ico"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg></div><h3>IdP sign-in</h3><p>OIDC or LDAP, before any connection opens.</p></div>
+      <div class="wire"><span class="orb"></span></div>
+      <div class="node accent"><div class="ico"><svg viewBox="0 0 24 24"><path d="M12 3l7 3v5c0 5-3 8-7 10-4-2-7-5-7-10V6z"/><path d="M9 12l2 2 4-4"/></svg></div><h3>Session holds identity</h3><p>The authenticated person rides the session end to end.</p></div>
+      <div class="wire"><span class="orb" style="animation-delay:.4s"></span></div>
+      <div class="node pulse"><div class="ico"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M7 9l3 2-3 2M13 14h4"/></svg></div><h3>Host sees a service account</h3><p>But Boundary holds the link the host never had.</p></div>
+    </div>
+  </section>
+
+  <!-- 9 recording -->
+  <section class="slide" data-notes="The recording flow. The worker proxies the SSH session and captures it as it streams, writes it to the object store in BSR format when the session ends, and the replay is bound to the user captured at session start. The last node pulses as the recording lands.">
+    <div class="head-block"><div class="kick">Audit &amp; compliance</div><h2 class="title sm">Recorded at the worker, bound to the user</h2></div>
+    <div class="flow">
+      <div class="node"><div class="ico"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg></div><h3>Authenticated user</h3><p>Signed in through your IdP, authorized to one target.</p></div>
+      <div class="wire"><span class="orb"></span></div>
+      <div class="node accent"><div class="ico"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/></svg></div><h3>Worker records</h3><p>Proxies the session and captures it as it streams.</p></div>
+      <div class="wire"><span class="orb" style="animation-delay:.3s"></span></div>
+      <div class="node"><div class="ico"><svg viewBox="0 0 24 24"><ellipse cx="12" cy="6" rx="7" ry="3"/><path d="M5 6v12c0 1.7 3.1 3 7 3s7-1.3 7-3V6"/><path d="M5 12c0 1.7 3.1 3 7 3s7-1.3 7-3"/></svg></div><h3>BSR to object store</h3><p>Written to S3 or MinIO when the session ends.</p></div>
+      <div class="wire"><span class="orb" style="animation-delay:.6s"></span></div>
+      <div class="node pulse"><div class="ico"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M10 9l5 3-5 3z"/></svg></div><h3>Replay &amp; attribution</h3><p>Replayed in the console, tied to the user from session start.</p></div>
+    </div>
+  </section>
+
+  <!-- 10 siem -->
+  <section class="slide" data-notes="Recording answers what happened inside a session. Audit events answer the shape of everything around it: who authenticated, who was authorized, when sessions opened and closed. Stream it and the CyberArk-plus-host join is gone for good.">
+    <div class="head-block"><div class="kick">Audit &amp; compliance</div><h2 class="title sm">Every action becomes a queryable event</h2></div>
+    <div class="grid g4">
+      <div class="card"><h3>Structured events</h3><p>Authentication, authorization, session start and end, connection activity.</p></div>
+      <div class="card"><h3>Correlation IDs</h3><p>One request reads as one thread across controllers and workers, not scattered lines.</p></div>
+      <div class="card"><h3>Streamed to your SIEM</h3><p>Real-time to Splunk, Elastic, or whatever the SOC runs.</p></div>
+      <div class="card"><h3>One source, not two</h3><p>The record already holds the person and the action. No reconciliation.</p></div>
+    </div>
+  </section>
+
+  <!-- 11 retention -->
+  <section class="slide" data-notes="Compliance is capture plus lifecycle. Storage policies set how long recordings are kept and when they are deleted. They resolve top down through scopes: longest retention wins, shortest deletion wins, and a policy can be locked so a lower scope cannot loosen it.">
+    <div class="head-block"><div class="kick">Audit &amp; compliance</div><h2 class="title sm">Keep what compliance needs, clear the rest</h2></div>
+    <div class="grid g3">
+      <div class="card"><h3>Storage policies</h3><p>Retention and deletion windows attached to a scope, applied to every recording under it.</p></div>
+      <div class="card"><h3>Resolved top down</h3><p>Global through orgs: longest retention wins, shortest deletion wins. Predictable by design.</p></div>
+      <div class="card"><h3>A floor you can lock</h3><p>Set a mandate at the top that no lower scope can weaken. The auditors' line in the sand.</p></div>
+    </div>
+  </section>
+
+  <!-- 12 kubernetes -->
+  <section class="slide" data-notes="Kubernetes, same model. boundary connect kube proxies kubectl to the cluster. Vault's Kubernetes secrets engine mints a short-lived, RBAC-scoped service-account token. No kubeconfig on the laptop, token lasts minutes, and an out-of-scope action is denied by the cluster.">
+    <div class="head-block"><div class="kick">Kubernetes</div><h2 class="title sm">The cluster, same model</h2></div>
+    <div class="flow">
+      <div class="node"><div class="ico"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg></div><h3>boundary connect kube</h3><p>kubectl, proxied. No kubeconfig on the laptop.</p></div>
+      <div class="wire"><span class="orb"></span></div>
+      <div class="node accent"><div class="ico"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/></svg></div><h3>Worker proxies</h3><p>Routes the API call, pins it to a recorded session.</p></div>
+      <div class="wire"><span class="orb" style="animation-delay:.3s"></span></div>
+      <div class="node"><div class="ico"><svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg></div><h3>Vault mints a token</h3><p>Short-lived SA token, scoped by RBAC to one namespace.</p></div>
+      <div class="wire"><span class="orb" style="animation-delay:.6s"></span></div>
+      <div class="node pulse"><div class="ico"><svg viewBox="0 0 24 24"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M12 3v18M4 7.5l8 4.5 8-4.5"/></svg></div><h3>Cluster API</h3><p>Grants what the token allows, denies the rest.</p></div>
+    </div>
+  </section>
+
+  <!-- 13 PAM -->
+  <section class="slide" data-notes="Just-in-time privileged access. The engineer holds no standing grant to production. They raise a request with a justification, an approver signs off, Boundary opens the target for a fixed window, and the grant removes itself when the window closes. Every step lands on the ticket's audit timeline. This is a change window that enforces itself.">
+    <div class="head-block"><div class="kick">Just-in-time access</div><h2 class="title sm">Production access, only in the window</h2></div>
+    <div class="flow">
+      <div class="node"><div class="ico"><svg viewBox="0 0 24 24"><path d="M4 7h16v3a2 2 0 0 0 0 4v3H4v-3a2 2 0 0 0 0-4z"/><path d="M14 7v10"/></svg></div><h3>Request</h3><p>Target, justification, window length. Logged with a name.</p></div>
+      <div class="wire"><span class="orb"></span></div>
+      <div class="node"><div class="ico"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M8 12l3 3 5-6"/></svg></div><h3>Approve</h3><p>An approver signs off. Who and when, recorded.</p></div>
+      <div class="wire"><span class="orb" style="animation-delay:.3s"></span></div>
+      <div class="node accent"><div class="ico"><svg viewBox="0 0 24 24"><path d="M12 3l7 3v5c0 5-3 8-7 10-4-2-7-5-7-10V6z"/><path d="M9 12l2 2 4-4"/></svg></div><h3>Boundary grants</h3><p>The engineer joins the role for this target, now.</p></div>
+      <div class="wire"><span class="orb" style="animation-delay:.6s"></span></div>
+      <div class="node pulse"><div class="ico"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></div><h3>Auto-revoke</h3><p>Window closes, grant removes itself. No one forgets.</p></div>
+    </div>
+  </section>
+
+  <!-- 14 demo map -->
+  <section class="slide" data-notes="This is the live walkthrough, in order. Each beat maps to a slide you just saw. Keep each one short; the recording playback and the self-closing PAM window are the two that land hardest with a bank.">
+    <div class="head-block"><div class="kick">Let's see it</div><h2 class="title sm">The walkthrough</h2></div>
+    <div class="demo">
+      <div class="step"><div class="no">01</div><div><h4>SSH, passwordless and recorded</h4><p>Connect with an injected Vault certificate, then replay the session.</p></div></div>
+      <div class="step"><div class="no">02</div><div><h4>Name the human</h4><p>List recordings; Boundary names the person the host never saw.</p></div></div>
+      <div class="step"><div class="no">03</div><div><h4>Brokering vs injection</h4><p>Postgres hands you the secret; SSH never did. The enterprise line.</p></div></div>
+      <div class="step"><div class="no">04</div><div><h4>Kubernetes</h4><p>boundary connect kube with a short-lived, scoped token.</p></div></div>
+      <div class="step"><div class="no">05</div><div><h4>Just-in-time PAM</h4><p>Request, approve, access for a window, auto-revoke.</p></div></div>
+      <div class="step"><div class="no">06</div><div><h4>The audit picture</h4><p>Playback, the Grafana event dashboard, the per-ticket timeline.</p></div></div>
+    </div>
+  </section>
+
+  <!-- 15 close -->
+  <section class="slide closing" data-notes="Land it. Standing access to production is gone. Access is now an event with a name, a reason, an approval, a clock, and a recording. That is what who-did-what-and-when looks like when you can actually answer it.">
+    <div class="kick">The outcome</div>
+    <h2 class="title">Access is an event with a name on it</h2>
+    <div class="lead">A reason, an approval, a clock, and a recording. Standing access to production is gone, and every path is audited. That is how a bank answers "who is doing what, and when."</div>
+  </section>
+
+</div>
+
+<div id="notes"></div>
+<div id="hint">← → navigate · N notes · F fullscreen</div>
+
+<script>
+const stage=document.getElementById('stage'),slides=[...document.querySelectorAll('.slide')];
+let i=0;
+function fit(){const s=Math.min(innerWidth/1920,innerHeight/1080);stage.style.transform='scale('+s+')';}
+function show(n){i=Math.max(0,Math.min(slides.length-1,n));
+  slides.forEach((s,k)=>s.classList.toggle('active',k===i));
+  document.getElementById('bar').style.width=((i+1)/slides.length*100)+'%';
+  const nt=document.getElementById('notes');
+  if(nt.classList.contains('show')){nt.innerHTML='<b>Speaker notes · '+(i+1)+'/'+slides.length+'</b>'+(slides[i].dataset.notes||'');}
+}
+addEventListener('resize',fit);
+addEventListener('keydown',e=>{
+  if(e.key==='ArrowRight'||e.key==='PageDown'||e.key===' '){show(i+1);e.preventDefault();}
+  else if(e.key==='ArrowLeft'||e.key==='PageUp'){show(i-1);}
+  else if(e.key==='Home'){show(0);}else if(e.key==='End'){show(slides.length-1);}
+  else if(e.key.toLowerCase()==='n'){const nt=document.getElementById('notes');nt.classList.toggle('show');show(i);}
+  else if(e.key.toLowerCase()==='f'){if(!document.fullscreenElement)document.documentElement.requestFullscreen();else document.exitFullscreen();}
+});
+stage.addEventListener('click',e=>{show(i+(e.clientX<innerWidth*0.35?-1:1));});
+fit();show(0);
+</script>
+</body>
+</html>

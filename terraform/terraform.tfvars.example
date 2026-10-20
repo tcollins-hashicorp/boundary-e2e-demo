@@ -1,0 +1,16 @@
+# Defaults match the self-managed controller and compose stack, so you normally
+# need nothing here. Override if you changed the demo keys or addresses.
+# Copy to terraform.tfvars to use.
+
+# boundary_addr         = "http://localhost:9200"
+# boundary_recovery_key = "<recovery key from boundary/controller.hcl>"
+
+# engineer_login_name = "dana"
+# engineer_password   = "Password123!"
+
+# pam_operator_login    = "pam-operator"
+# pam_operator_password = "pam-operator-pw"
+
+# minio_bucket     = "boundary-session-recordings"
+# minio_access_key = "boundary"
+# minio_secret_key = "boundary-secret-key"

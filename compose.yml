@@ -1,0 +1,315 @@
+# Boundary end-to-end demo — single compose project, run with podman.
+# Fully self-contained: the Boundary Enterprise control plane runs here too
+# (boundary + boundary-db), alongside the worker, the Kubernetes cluster (k3s),
+# Vault, MinIO, the PAM portal and observability. No cloud dependency.
+#
+# Runtime is rootless podman via `podman compose`, the same on macOS (inside the
+# podman machine VM) and Linux. The worker joins the controller with a shared
+# worker-auth KMS key (no activation token). Terraform provisions the controller
+# through its recovery KMS key. scripts/setup-cluster.sh wires Vault to k3s.
+#
+# Logging is file-based (no container socket): Vault, the worker, and the PAM app
+# each write structured logs that Promtail tails. Writable host-dir binds carry
+# :z so SELinux-enforcing hosts (Fedora/RHEL) relabel them.
+
+name: boundary-e2e
+
+networks:
+  boundary-demo:
+    name: boundary-demo
+
+volumes:
+  vault-file:
+  minio-data:
+  boundary-db-data:
+  worker-auth:
+  worker-recordings:
+  worker-logs:
+  k3s-server:
+  grafana-data:
+  loki-data:
+
+services:
+
+  # ---------------------------------------------------------------- Vault
+  vault:
+    image: docker.io/hashicorp/vault:1.18
+    container_name: vault
+    networks: [boundary-demo]
+    ports: ["8200:8200"]
+    cap_add: [IPC_LOCK]
+    environment:
+      VAULT_DEV_ROOT_TOKEN_ID: ${VAULT_TOKEN:-root}
+      VAULT_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
+      VAULT_ADDR: http://127.0.0.1:8200
+    volumes:
+      - vault-file:/vault/file
+      - ./vault/audit:/vault/audit:z
+    command: server -dev -dev-root-token-id=${VAULT_TOKEN:-root}
+    healthcheck:
+      test: ["CMD", "vault", "status", "-address=http://127.0.0.1:8200"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  vault-bootstrap:
+    image: docker.io/hashicorp/vault:1.18
+    container_name: vault-bootstrap
+    networks: [boundary-demo]
+    depends_on:
+      vault: { condition: service_healthy }
+    environment:
+      VAULT_ADDR: http://vault:8200
+      VAULT_TOKEN: ${VAULT_TOKEN:-root}
+    volumes:
+      - ./vault:/work:z
+    entrypoint: ["/bin/sh", "/work/bootstrap.sh"]
+    restart: "no"
+
+  # ---------------------------------------------------------------- MinIO
+  # Image reference is configurable via MINIO_IMAGE. Default is the confirmed
+  # working reference; the recording bucket is created by boto3 (see
+  # minio-bootstrap), so the mc client image is not needed.
+  minio:
+    image: ${MINIO_IMAGE:-minio/minio:latest}
+    container_name: minio
+    networks: [boundary-demo]
+    ports: ["9000:9000", "9001:9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    volumes:
+      - minio-data:/data
+    command: server /data --console-address ":9001"
+
+  # Creates the recording bucket with a small boto3 script on the python image we
+  # already use, so there is no dependency on the (removed) minio/mc client. The
+  # script waits for MinIO itself, so no healthcheck gate is needed.
+  minio-bootstrap:
+    image: docker.io/library/python:3.12-slim
+    container_name: minio-bootstrap
+    networks: [boundary-demo]
+    depends_on: [minio]
+    environment:
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      MINIO_BUCKET: ${MINIO_BUCKET:-boundary-session-recordings}
+    volumes:
+      - ./minio:/work:z
+    entrypoint: ["/bin/sh", "-c", "pip install --quiet --no-cache-dir boto3 && python /work/create-bucket.py"]
+    restart: "no"
+
+  # ---------------------------------------------------------------- Targets
+  ssh-target:
+    build: ./targets/ssh
+    container_name: ssh-target
+    networks: [boundary-demo]
+    depends_on:
+      vault-bootstrap: { condition: service_completed_successfully }
+    environment:
+      VAULT_ADDR: http://vault:8200
+      VAULT_TOKEN: ${VAULT_TOKEN:-root}
+
+  # Postgres exists for the brokering-vs-injection contrast. Boundary hands its
+  # credential to the user (brokering), which Community Edition can also do. The
+  # SSH target injects instead, and the user never sees the secret.
+  postgres-target:
+    image: docker.io/library/postgres:16
+    container_name: postgres-target
+    networks: [boundary-demo]
+    environment:
+      POSTGRES_USER: demo
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres-demo-pw}
+      POSTGRES_DB: demo
+
+  # ---------------------------------------------------------------- Kubernetes
+  # k3s as a service on the compose network. Reachable at k3s:6443 by name, so
+  # Vault and the worker need no network join and no host kubectl. Runs the same
+  # on macOS (inside the podman machine) and Linux. native snapshotter avoids
+  # overlay-in-overlay issues; traefik/servicelb/metrics-server off to stay light.
+  k3s:
+    image: docker.io/rancher/k3s:v1.31.5-k3s1
+    container_name: k3s
+    command:
+      - server
+      - "--tls-san=k3s"
+      - "--snapshotter=native"
+      - "--disable=traefik"
+      - "--disable=servicelb"
+      - "--disable=metrics-server"
+      - "--write-kubeconfig-mode=644"
+    privileged: true
+    networks:
+      boundary-demo:
+        aliases: [k3s]
+    ports:
+      - "6443:6443"
+    tmpfs:
+      - /run
+      - /var/run
+    volumes:
+      - k3s-server:/var/lib/rancher/k3s
+    healthcheck:
+      test: ["CMD-SHELL", "KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl get --raw=/readyz >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 40s
+
+  # ---------------------------------------------------------------- Boundary control plane
+  # Postgres is Boundary's own state store (separate from the postgres-target).
+  boundary-db:
+    image: docker.io/library/postgres:16
+    container_name: boundary-db
+    networks: [boundary-demo]
+    environment:
+      POSTGRES_USER: boundary
+      POSTGRES_PASSWORD: ${BOUNDARY_PG_PASSWORD:-boundary}
+      POSTGRES_DB: boundary
+    volumes:
+      - boundary-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "boundary"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+
+  # One-shot: migrate the Boundary schema. Idempotent (see boundary/init.sh).
+  boundary-init:
+    image: docker.io/hashicorp/boundary-enterprise:${BOUNDARY_VERSION:-0.20.1-ent}
+    container_name: boundary-init
+    networks: [boundary-demo]
+    depends_on:
+      boundary-db: { condition: service_healthy }
+    environment:
+      BOUNDARY_PG_URL: postgresql://boundary:${BOUNDARY_PG_PASSWORD:-boundary}@boundary-db:5432/boundary?sslmode=disable
+      BOUNDARY_LICENSE: ${BOUNDARY_LICENSE:?set your Boundary Enterprise license in .env}
+    volumes:
+      - ./boundary/controller.hcl:/boundary/controller.hcl:ro,z
+      - ./boundary/init.sh:/boundary/init.sh:ro,z
+    entrypoint: ["/bin/sh", "/boundary/init.sh"]
+    restart: "no"
+
+  # Self-managed Boundary Enterprise controller.
+  boundary:
+    image: docker.io/hashicorp/boundary-enterprise:${BOUNDARY_VERSION:-0.20.1-ent}
+    container_name: boundary
+    networks: [boundary-demo]
+    ports:
+      - "9200:9200"   # api
+      - "9201:9201"   # cluster (worker dial-in)
+      - "9203:9203"   # ops/health
+    depends_on:
+      boundary-init: { condition: service_completed_successfully }
+    environment:
+      BOUNDARY_PG_URL: postgresql://boundary:${BOUNDARY_PG_PASSWORD:-boundary}@boundary-db:5432/boundary?sslmode=disable
+      BOUNDARY_LICENSE: ${BOUNDARY_LICENSE:?set your Boundary Enterprise license in .env}
+    volumes:
+      - ./boundary/controller.hcl:/boundary/controller.hcl:ro,z
+    command: server -config /boundary/controller.hcl
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9203/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------- Worker
+  # Self-managed worker (enterprise binary: records + injects). Authenticates to
+  # the local controller with the shared worker-auth KMS key.
+  worker:
+    # Built from ./worker/Dockerfile (root user + an entrypoint that makes the
+    # recording/log paths writable). The stock image plus compose mount flags was
+    # unreliable under the external docker-compose provider: neither `:U` nor a
+    # `user:` override was applied, so the worker could not write its volumes
+    # (integrity violation #108 on /boundary/recordings/.validate). The custom
+    # image removes that dependency. Local demo convenience, not a prod pattern.
+    build:
+      context: ./worker
+      args:
+        BOUNDARY_VERSION: ${BOUNDARY_VERSION:-0.20.1-ent}
+    container_name: boundary-worker
+    networks: [boundary-demo]
+    ports: ["9202:9202"]
+    depends_on:
+      boundary: { condition: service_healthy }
+      vault-bootstrap: { condition: service_completed_successfully }
+      minio-bootstrap: { condition: service_completed_successfully }
+    environment:
+      # The address CLIENTS use to reach the worker's proxy. Demo clients run on
+      # the host (your Mac), which reaches the worker via its published port at
+      # localhost:9202 — NOT the compose-internal name boundary-worker:9202, which
+      # the host can't resolve. Override only if you run clients inside the network.
+      WORKER_PUBLIC_ADDR: ${WORKER_PUBLIC_ADDR:-localhost:9202}
+    volumes:
+      - ./worker/boundary-worker.hcl:/boundary/boundary-worker.hcl:ro,z
+      - worker-auth:/boundary/auth
+      - worker-recordings:/boundary/recordings
+      - worker-logs:/boundary/logs
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------- PAM portal
+  pam-app:
+    build: ./pam-app
+    container_name: pam-app
+    networks: [boundary-demo]
+    ports: ["8080:8080"]
+    depends_on:
+      boundary: { condition: service_healthy }
+    environment:
+      # Fixed to the in-container controller name, NOT ${BOUNDARY_ADDR}: the host
+      # CLI sets BOUNDARY_ADDR=http://localhost:9200 for its own use, but inside the
+      # container the controller is reachable as "boundary", and localhost would be
+      # the pam-app container itself (connection refused).
+      BOUNDARY_ADDR: http://boundary:9200
+      BOUNDARY_AUTH_METHOD_ID: ${BOUNDARY_AUTH_METHOD_ID:-}
+      BOUNDARY_ADMIN_LOGIN_NAME: ${PAM_OPERATOR_LOGIN:-pam-operator}
+      BOUNDARY_ADMIN_PASSWORD: ${PAM_OPERATOR_PASSWORD:-pam-operator-pw}
+      ENGINEER_LOGIN: ${ENGINEER_LOGIN:-dana}
+      PAM_AUDIT_LOG: /var/log/pam/audit.jsonl
+    volumes:
+      - ./pam-app/data:/var/log/pam:z
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------- Observability
+  loki:
+    image: docker.io/grafana/loki:3.4.2
+    container_name: loki
+    networks: [boundary-demo]
+    command: -config.file=/etc/loki/loki-config.yaml
+    volumes:
+      - ./observability/loki-config.yaml:/etc/loki/loki-config.yaml:ro
+      - loki-data:/loki
+    ports: ["3100:3100"]
+
+  promtail:
+    image: docker.io/grafana/promtail:3.4.2
+    container_name: promtail
+    networks: [boundary-demo]
+    command: -config.file=/etc/promtail/promtail-config.yaml
+    # File-based only: no container socket. Tails the three structured logs that
+    # carry the audit story: Vault credential brokering, PAM grant/revoke, and
+    # Boundary worker events. Works identically on macOS and Linux.
+    volumes:
+      - ./observability/promtail-config.yaml:/etc/promtail/promtail-config.yaml:ro,z
+      - ./vault/audit:/logs/vault:ro,z
+      - ./pam-app/data:/logs/pam:ro,z
+      - worker-logs:/logs/worker:ro
+    depends_on: [loki]
+
+  grafana:
+    image: docker.io/grafana/grafana:11.5.2
+    container_name: grafana
+    networks: [boundary-demo]
+    ports: ["3000:3000"]
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GF_SECURITY_ADMIN_PASSWORD:-admin}
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro,z
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro,z
+      - grafana-data:/var/lib/grafana
+    depends_on: [loki]
